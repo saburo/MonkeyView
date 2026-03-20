@@ -1,5 +1,5 @@
 import type { NormalizedPoint, Point, Rect, Size, TransformedBounds } from '../types'
-import { clampScale } from './transform'
+import { SCREEN_Y_SCALE, clampScale } from './transform'
 
 export const MAX_INTERACTION_SURFACE_EDGE = 4096
 
@@ -40,12 +40,20 @@ export function rotateVectorClockwise(vector: Point, rotationDeg: number): Point
   }
 }
 
+export function scaleVectorAlongScreenY(vector: Point, screenScaleY: number): Point {
+  return {
+    x: vector.x,
+    y: vector.y * screenScaleY,
+  }
+}
+
 export function transformSourcePoint(
   point: Point,
   sourceSize: Size,
   anchor: NormalizedPoint,
   uniformScale: number,
   rotationDeg: number,
+  screenScaleY: number,
 ): Point {
   const anchorSourcePosition = getAnchorSourcePosition(sourceSize, anchor)
   const relative = {
@@ -57,10 +65,11 @@ export function transformSourcePoint(
     y: relative.y * uniformScale,
   }
   const rotated = rotateVectorClockwise(scaled, rotationDeg)
+  const screenScaled = scaleVectorAlongScreenY(rotated, screenScaleY)
 
   return {
-    x: anchorSourcePosition.x + rotated.x,
-    y: anchorSourcePosition.y + rotated.y,
+    x: anchorSourcePosition.x + screenScaled.x,
+    y: anchorSourcePosition.y + screenScaled.y,
   }
 }
 
@@ -69,13 +78,16 @@ export function computeTransformedBounds(
   anchor: NormalizedPoint,
   uniformScale: number,
   rotationDeg: number,
+  screenScaleY = SCREEN_Y_SCALE,
 ): TransformedBounds {
   const corners = [
     { x: 0, y: 0 },
     { x: sourceSize.width, y: 0 },
     { x: sourceSize.width, y: sourceSize.height },
     { x: 0, y: sourceSize.height },
-  ].map((point) => transformSourcePoint(point, sourceSize, anchor, uniformScale, rotationDeg))
+  ].map((point) =>
+    transformSourcePoint(point, sourceSize, anchor, uniformScale, rotationDeg, screenScaleY),
+  )
 
   const xValues = corners.map((point) => point.x)
   const yValues = corners.map((point) => point.y)
@@ -149,9 +161,17 @@ export function mapSourcePointToRender(
   anchor: NormalizedPoint,
   uniformScale: number,
   rotationDeg: number,
+  screenScaleY: number,
   bounds: TransformedBounds,
 ): Point {
-  const transformed = transformSourcePoint(sourcePoint, sourceSize, anchor, uniformScale, rotationDeg)
+  const transformed = transformSourcePoint(
+    sourcePoint,
+    sourceSize,
+    anchor,
+    uniformScale,
+    rotationDeg,
+    screenScaleY,
+  )
 
   return {
     x: transformed.x + bounds.offsetX,
@@ -166,6 +186,7 @@ export function mapRenderPointToSource(
   anchor: NormalizedPoint,
   uniformScale: number,
   rotationDeg: number,
+  screenScaleY: number,
 ): Point {
   const anchorSourcePosition = getAnchorSourcePosition(sourceSize, anchor)
   const transformedPoint = {
@@ -176,7 +197,8 @@ export function mapRenderPointToSource(
     x: transformedPoint.x - anchorSourcePosition.x,
     y: transformedPoint.y - anchorSourcePosition.y,
   }
-  const unrotated = rotateVectorClockwise(relative, -rotationDeg)
+  const unscaledScreen = scaleVectorAlongScreenY(relative, 1 / Math.max(screenScaleY, 0.0001))
+  const unrotated = rotateVectorClockwise(unscaledScreen, -rotationDeg)
   const safeScale = Math.max(clampScale(uniformScale), 0.0001)
 
   return {
@@ -201,11 +223,16 @@ export function isSourcePointInsideImage(sourcePoint: Point, sourceSize: Size): 
   )
 }
 
-export function computeInitialFitScale(sourceSize: Size, workArea: Rect, fitRatio = 0.8): number {
+export function computeInitialFitScale(
+  sourceSize: Size,
+  workArea: Rect,
+  fitRatio = 0.8,
+  screenScaleY = SCREEN_Y_SCALE,
+): number {
   const maxWidth = workArea.width * fitRatio
   const maxHeight = workArea.height * fitRatio
   const widthScale = maxWidth / Math.max(1, sourceSize.width)
-  const heightScale = maxHeight / Math.max(1, sourceSize.height)
+  const heightScale = maxHeight / Math.max(1, sourceSize.height * screenScaleY)
   const scale = Math.min(1, widthScale, heightScale)
 
   return clampScale(scale)

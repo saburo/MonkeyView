@@ -16,7 +16,7 @@
     mapSourcePointToRender,
     normalizeSourcePoint,
   } from '../math/bounds'
-  import { createTransformDragSession, projectTransformDrag } from '../math/transform'
+  import { SCREEN_Y_SCALE, createTransformDragSession, projectTransformDrag } from '../math/transform'
   import { loadImageAsset } from '../image/imageLoader'
   import type { Point, Rect, Size, TransformDragSession, TransformedBounds } from '../types'
   import {
@@ -267,6 +267,8 @@
       const initialScale = computeInitialFitScale(
         interactionSurfaceSize,
         workArea,
+        0.8,
+        SCREEN_Y_SCALE,
       )
       const nextState = createDefaultTransformState()
       nextState.uniformScale = initialScale
@@ -276,6 +278,7 @@
         nextState.anchor,
         nextState.uniformScale,
         nextState.rotationDeg,
+        SCREEN_Y_SCALE,
       )
 
       const toolbarWindow = await getAppWindowByLabel(TOOLBAR_WINDOW_LABEL)
@@ -444,6 +447,7 @@
       session.state.anchor,
       session.state.uniformScale,
       session.state.rotationDeg,
+      SCREEN_Y_SCALE,
     )
 
     await setOverlayClickThrough(overlayWindow, session.state.clickThrough)
@@ -508,6 +512,7 @@
       session.state.anchor,
       session.state.uniformScale,
       session.state.rotationDeg,
+      SCREEN_Y_SCALE,
     )
     const workArea = await getCurrentMonitorWorkArea(overlayWindow)
     const { bounds: nextBounds, windowPosition: nextWindowPosition } =
@@ -555,6 +560,7 @@
       session.state.anchor,
       session.state.uniformScale,
       session.state.rotationDeg,
+      SCREEN_Y_SCALE,
     )
 
     if (!isSourcePointInsideImage(sourcePoint, session.sourceSize)) {
@@ -583,6 +589,7 @@
       },
       session.state.uniformScale,
       session.state.rotationDeg,
+      SCREEN_Y_SCALE,
     )
 
     if (!nextDragSession) {
@@ -606,10 +613,14 @@
       return
     }
 
-    const nextTransform = projectTransformDrag(dragSession, {
-      x: event.screenX,
-      y: event.screenY,
-    })
+    const nextTransform = projectTransformDrag(
+      dragSession,
+      {
+        x: event.screenX,
+        y: event.screenY,
+      },
+      SCREEN_Y_SCALE,
+    )
     session.state = {
       ...session.state,
       uniformScale: nextTransform.uniformScale,
@@ -621,6 +632,7 @@
       session.state.anchor,
       session.state.uniformScale,
       session.state.rotationDeg,
+      SCREEN_Y_SCALE,
     )
     const constrainedGeometry = dragWorkArea
       ? constrainTransformedBoundsToWorkArea(tightBounds, dragWorkArea, dragSession.anchorScreen)
@@ -761,7 +773,7 @@
 
   $: imageStyle =
     bounds && session.sourceSize && anchorPosition
-      ? `width:${session.sourceSize.width}px;height:${session.sourceSize.height}px;opacity:${session.state.opacity};transform-origin:${anchorPosition.x}px ${anchorPosition.y}px;transform:translate(${bounds.offsetX}px, ${bounds.offsetY}px) rotate(${session.state.rotationDeg}deg) scale(${session.state.uniformScale});`
+      ? `width:${session.sourceSize.width}px;height:${session.sourceSize.height}px;opacity:${session.state.opacity};transform-origin:${anchorPosition.x}px ${anchorPosition.y}px;transform:translate(${bounds.offsetX}px, ${bounds.offsetY}px) scaleY(${SCREEN_Y_SCALE}) rotate(${session.state.rotationDeg}deg) scale(${session.state.uniformScale});`
       : ''
 
   $: anchorMarkerStyle =
@@ -777,6 +789,7 @@
           session.state.anchor,
           session.state.uniformScale,
           session.state.rotationDeg,
+          SCREEN_Y_SCALE,
           bounds,
         )
       : null
