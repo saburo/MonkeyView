@@ -11,7 +11,7 @@ describe('overlay state helpers', () => {
   it('creates the specified default transform state', () => {
     const state = createDefaultTransformState()
 
-    expect(state.anchor).toEqual({ x: 0, y: 0 })
+    expect(state.anchor).toEqual({ x: 0.5, y: 0.5 })
     expect(state.mode).toBe('transform')
     expect(state.clickThrough).toBe(false)
   })
@@ -19,10 +19,10 @@ describe('overlay state helpers', () => {
   it('clones transform state without sharing nested anchor references', () => {
     const state = createDefaultTransformState()
     const cloned = cloneTransformState(state)
-    cloned.anchor.x = 0.5
+    cloned.anchor.x = 0.25
 
-    expect(state.anchor.x).toBe(0)
-    expect(cloned.anchor.x).toBe(0.5)
+    expect(state.anchor.x).toBe(0.5)
+    expect(cloned.anchor.x).toBe(0.25)
   })
 
   it('formats clockwise rotation readouts in a normalized range', () => {

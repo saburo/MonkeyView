@@ -7,8 +7,8 @@ export function createDefaultTransformState(): OverlayTransformState {
     uniformScale: 1,
     rotationDeg: 0,
     anchor: {
-      x: 0,
-      y: 0,
+      x: 0.5,
+      y: 0.5,
     },
     mode: 'transform',
     clickThrough: false,
