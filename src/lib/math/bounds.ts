@@ -1,8 +1,25 @@
 import type { NormalizedPoint, Point, Rect, Size, TransformedBounds } from '../types'
 import { clampScale } from './transform'
 
+export const MAX_INTERACTION_SURFACE_EDGE = 4096
+
 export function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
+}
+
+export function computeInteractionSurfaceSize(sourceSize: Size, maxEdge = MAX_INTERACTION_SURFACE_EDGE): Size {
+  const longestEdge = Math.max(sourceSize.width, sourceSize.height)
+
+  if (longestEdge <= maxEdge) {
+    return sourceSize
+  }
+
+  const scale = maxEdge / Math.max(1, longestEdge)
+
+  return {
+    width: Math.max(1, Math.round(sourceSize.width * scale)),
+    height: Math.max(1, Math.round(sourceSize.height * scale)),
+  }
 }
 
 export function getAnchorSourcePosition(sourceSize: Size, anchor: NormalizedPoint): Point {

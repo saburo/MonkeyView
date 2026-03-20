@@ -6,6 +6,7 @@
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
   import {
     clampWindowPositionToRect,
+    computeInteractionSurfaceSize,
     constrainTransformedBoundsToWorkArea,
     computeInitialFitScale,
     computeTransformedBounds,
@@ -257,23 +258,21 @@
 
     try {
       const asset = await loadImageAsset(path)
+      const interactionSurfaceSize = computeInteractionSurfaceSize({
+        width: asset.sourceWidth,
+        height: asset.sourceHeight,
+      })
       const monitorReferenceWindow = (await getAppWindowByLabel(TOOLBAR_WINDOW_LABEL)) ?? overlayWindow
       const workArea = await getCurrentMonitorWorkArea(monitorReferenceWindow)
       const initialScale = computeInitialFitScale(
-        {
-          width: asset.sourceWidth,
-          height: asset.sourceHeight,
-        },
+        interactionSurfaceSize,
         workArea,
       )
       const nextState = createDefaultTransformState()
       nextState.uniformScale = initialScale
 
       const nextBounds = computeTransformedBounds(
-        {
-          width: asset.sourceWidth,
-          height: asset.sourceHeight,
-        },
+        interactionSurfaceSize,
         nextState.anchor,
         nextState.uniformScale,
         nextState.rotationDeg,
@@ -300,10 +299,9 @@
 
       session.imagePath = asset.imagePath
       session.renderAssetPath = asset.renderAssetPath
-      session.sourceSize = {
-        width: asset.sourceWidth,
-        height: asset.sourceHeight,
-      }
+      // Keep the interaction surface bounded so large images do not force enormous
+      // transform-origin and translate values during anchor changes.
+      session.sourceSize = interactionSurfaceSize
       session.loadingImage = false
       session.state = nextState
       session.loadedState = cloneTransformState(nextState)

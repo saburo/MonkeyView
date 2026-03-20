@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   clampWindowPositionToRect,
+  computeInteractionSurfaceSize,
   constrainTransformedBoundsToWorkArea,
   computeInitialFitScale,
   computeTransformedBounds,
@@ -25,6 +26,12 @@ describe('bounds math', () => {
     )
 
     expect(scale).toBe(1)
+  })
+
+  it('caps the interaction surface size while preserving aspect ratio', () => {
+    const size = computeInteractionSurfaceSize({ width: 12000, height: 6000 })
+
+    expect(size).toEqual({ width: 4096, height: 2048 })
   })
 
   it('computes transformed bounds around the top-left anchor', () => {
