@@ -1,0 +1,78 @@
+import { describe, expect, it } from 'vitest'
+import {
+  clampWindowPositionToRect,
+  constrainTransformedBoundsToWorkArea,
+  computeInitialFitScale,
+  computeTransformedBounds,
+  mapRenderPointToSource,
+  mapSourcePointToRender,
+} from './bounds'
+
+describe('bounds math', () => {
+  it('auto-fits oversized images to roughly 80 percent of the display', () => {
+    const scale = computeInitialFitScale(
+      { width: 4000, height: 2000 },
+      { x: 0, y: 0, width: 1000, height: 800 },
+    )
+
+    expect(scale).toBeCloseTo(0.2)
+  })
+
+  it('keeps native size when the image already fits comfortably', () => {
+    const scale = computeInitialFitScale(
+      { width: 320, height: 180 },
+      { x: 0, y: 0, width: 1600, height: 900 },
+    )
+
+    expect(scale).toBe(1)
+  })
+
+  it('computes transformed bounds around the top-left anchor', () => {
+    const bounds = computeTransformedBounds({ width: 100, height: 50 }, { x: 0, y: 0 }, 1, 90)
+
+    expect(bounds.width).toBeCloseTo(50)
+    expect(bounds.height).toBeCloseTo(100)
+    expect(bounds.anchorRenderPosition.x).toBeCloseTo(50)
+    expect(bounds.anchorRenderPosition.y).toBeCloseTo(0)
+  })
+
+  it('round-trips between source and render coordinates', () => {
+    const sourceSize = { width: 512, height: 256 }
+    const bounds = computeTransformedBounds(sourceSize, { x: 0.25, y: 0.75 }, 0.5, 33)
+    const sourcePoint = { x: 200, y: 100 }
+    const renderPoint = mapSourcePointToRender(sourcePoint, sourceSize, { x: 0.25, y: 0.75 }, 0.5, 33, bounds)
+    const mappedBack = mapRenderPointToSource(renderPoint, bounds, sourceSize, { x: 0.25, y: 0.75 }, 0.5, 33)
+
+    expect(mappedBack.x).toBeCloseTo(sourcePoint.x, 6)
+    expect(mappedBack.y).toBeCloseTo(sourcePoint.y, 6)
+  })
+
+  it('clamps window position inside the current work area', () => {
+    const clamped = clampWindowPositionToRect(
+      { x: -50, y: 900 },
+      { width: 300, height: 200 },
+      { x: 0, y: 0, width: 800, height: 600 },
+    )
+
+    expect(clamped).toEqual({ x: 0, y: 400 })
+  })
+
+  it('pins the anchor to the same screen point when the transformed bounds hit the work area edge', () => {
+    const tightBounds = computeTransformedBounds({ width: 200, height: 120 }, { x: 0, y: 0 }, 1, 90)
+    const anchorScreen = { x: 18, y: 32 }
+    const constrained = constrainTransformedBoundsToWorkArea(
+      tightBounds,
+      { x: 0, y: 0, width: 300, height: 200 },
+      anchorScreen,
+    )
+
+    expect(constrained.windowPosition.x + constrained.bounds.anchorRenderPosition.x).toBeCloseTo(
+      anchorScreen.x,
+    )
+    expect(constrained.windowPosition.y + constrained.bounds.anchorRenderPosition.y).toBeCloseTo(
+      anchorScreen.y,
+    )
+    expect(constrained.windowPosition.x).toBeGreaterThanOrEqual(0)
+    expect(constrained.windowPosition.y).toBeGreaterThanOrEqual(0)
+  })
+})
