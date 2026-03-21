@@ -13,15 +13,20 @@
     type ToolbarAction,
   } from "../state/contracts";
   import {
+    DEFAULT_TOOLBAR_SIZE,
     OVERLAY_WINDOW_LABEL,
     createWindowPositionScheduler,
     getAppWindowByLabel,
     getWindowLogicalPosition,
+    getWindowLogicalSize,
+    setWindowLogicalSize,
   } from "../window/windowControl";
 
   const toolbarWindow = getCurrentWindow();
   const toolbarWebview = getCurrentWebviewWindow();
+  const MIN_LOADING_INDICATOR_MS = 180;
 
+  let toolbarShellElement: HTMLDivElement | null = null;
   let dragHandleElement: HTMLButtonElement | null = null;
   let snapshot = createEmptySnapshot();
   let overlayPositionScheduler: ReturnType<
@@ -35,6 +40,99 @@
     toolbarOrigin: Point;
     overlayOrigin: Point | null;
   } | null = null;
+  let transientLoadingImage = false;
+  let loadingIndicatorVisibleUntil = 0;
+  let loadingIndicatorTimer: number | null = null;
+  let isLoadingImage = false;
+  let statusText = "";
+  let statusIsError = false;
+  let toolbarWindowWidth = DEFAULT_TOOLBAR_SIZE.width;
+  let toolbarHeightSyncFrame: number | null = null;
+
+  function clearToolbarHeightSyncFrame(): void {
+    if (toolbarHeightSyncFrame !== null) {
+      window.cancelAnimationFrame(toolbarHeightSyncFrame);
+      toolbarHeightSyncFrame = null;
+    }
+  }
+
+  async function syncToolbarWindowHeight(): Promise<void> {
+    if (!toolbarShellElement) {
+      return;
+    }
+
+    const desiredHeight = Math.max(
+      DEFAULT_TOOLBAR_SIZE.height,
+      Math.ceil(toolbarShellElement.scrollHeight + 2),
+    );
+    const currentSize = await getWindowLogicalSize(toolbarWindow).catch(
+      () => null,
+    );
+    const currentWidth = currentSize?.width ?? toolbarWindowWidth;
+    const currentHeight = currentSize?.height ?? DEFAULT_TOOLBAR_SIZE.height;
+
+    toolbarWindowWidth = currentWidth;
+
+    if (Math.abs(currentHeight - desiredHeight) < 1) {
+      return;
+    }
+
+    await setWindowLogicalSize(toolbarWindow, {
+      width: currentWidth,
+      height: desiredHeight,
+    }).catch(() => undefined);
+  }
+
+  function scheduleToolbarWindowHeightSync(): void {
+    clearToolbarHeightSyncFrame();
+    toolbarHeightSyncFrame = window.requestAnimationFrame(() => {
+      toolbarHeightSyncFrame = null;
+      void syncToolbarWindowHeight();
+    });
+  }
+
+  function clearLoadingIndicatorTimer(): void {
+    if (loadingIndicatorTimer !== null) {
+      window.clearTimeout(loadingIndicatorTimer);
+      loadingIndicatorTimer = null;
+    }
+  }
+
+  function beginLoadingIndicator(): void {
+    transientLoadingImage = true;
+    loadingIndicatorVisibleUntil =
+      performance.now() + MIN_LOADING_INDICATOR_MS;
+    clearLoadingIndicatorTimer();
+  }
+
+  function syncLoadingIndicator(loadingImage: boolean): void {
+    if (loadingImage) {
+      transientLoadingImage = true;
+      clearLoadingIndicatorTimer();
+      return;
+    }
+
+    if (!transientLoadingImage) {
+      return;
+    }
+
+    const remainingMs = Math.max(
+      0,
+      loadingIndicatorVisibleUntil - performance.now(),
+    );
+
+    if (remainingMs === 0) {
+      transientLoadingImage = false;
+      clearLoadingIndicatorTimer();
+      return;
+    }
+
+    clearLoadingIndicatorTimer();
+    loadingIndicatorTimer = window.setTimeout(() => {
+      transientLoadingImage = false;
+      loadingIndicatorTimer = null;
+    }, remainingMs);
+  }
 
   function isOpacityShortcut(event: KeyboardEvent): boolean {
     return (
@@ -120,9 +218,9 @@
     });
 
     if (typeof selection === "string") {
+      beginLoadingIndicator();
       snapshot = {
         ...snapshot,
-        loadingImage: true,
         statusMessage: "",
       };
 
@@ -292,12 +390,16 @@
       if (overlayWindow) {
         overlayPositionScheduler = createWindowPositionScheduler(overlayWindow);
       }
+      toolbarWindowWidth = (
+        await getWindowLogicalSize(toolbarWindow).catch(() => DEFAULT_TOOLBAR_SIZE)
+      ).width;
 
       const unlistenSnapshot =
         await toolbarWebview.listen<OverlaySnapshotEvent>(
           OVERLAY_STATE_SNAPSHOT_EVENT,
           (event) => {
             snapshot = event.payload;
+            syncLoadingIndicator(event.payload.loadingImage);
           },
         );
 
@@ -350,8 +452,23 @@
       window.addEventListener("keydown", handleKeyDown, true);
       window.addEventListener("keyup", handleKeyUp, true);
 
+      const resizeObserver =
+        toolbarShellElement === null
+          ? null
+          : new ResizeObserver(() => {
+              scheduleToolbarWindowHeightSync();
+            });
+
+      if (resizeObserver && toolbarShellElement) {
+        resizeObserver.observe(toolbarShellElement);
+      }
+      scheduleToolbarWindowHeightSync();
+
       disposers.push(unlistenSnapshot);
       disposers.push(() => {
+        clearLoadingIndicatorTimer();
+        clearToolbarHeightSyncFrame();
+        resizeObserver?.disconnect();
         window.removeEventListener("pointermove", handlePointerMove);
         window.removeEventListener("pointerup", handlePointerUp);
         window.removeEventListener("pointercancel", handlePointerCancel);
@@ -374,10 +491,27 @@
   $: if (snapshot.state.opacity < 0.995) {
     preferredOpacityPercent = Math.round(snapshot.state.opacity * 100);
   }
+
+  $: isLoadingImage = transientLoadingImage || snapshot.loadingImage;
+
+  $: {
+    const fileName = basename(snapshot.imagePath);
+    statusText = snapshot.statusMessage || fileName;
+    statusIsError =
+      Boolean(snapshot.statusMessage) && snapshot.statusMessage !== fileName;
+  }
+
+  $: if (toolbarShellElement) {
+    statusText;
+    statusIsError;
+    isLoadingImage;
+    scheduleToolbarWindowHeightSync();
+  }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
+  bind:this={toolbarShellElement}
   class="toolbar-shell"
   on:pointerdown|capture={() => void ensureToolbarFocus()}
 >
@@ -483,14 +617,16 @@
     </div>
   </div>
 
-  <div class="status-row">
-    {#if snapshot.loadingImage}
+  <div class:error={statusIsError} class="status-row">
+    {#if isLoadingImage}
       <span class="file-loading" aria-live="polite">
         <span class="loading-spinner" aria-hidden="true"></span>
         <span>Loading...</span>
       </span>
     {:else}
-      <span class="file-name">{basename(snapshot.imagePath)}</span>
+      <span class:file-error={statusIsError} class="file-name" title={statusText}>
+        {statusText}
+      </span>
     {/if}
     <span class="readout-text" aria-live="polite">
       {#if snapshot.imageLoaded}
@@ -506,7 +642,7 @@
     flex-direction: column;
     gap: 0.45rem;
     width: 100%;
-    height: 100%;
+    min-height: 100%;
     font-size: 0.82rem;
     padding: 0.6rem 0.7rem 0.7rem;
     background: linear-gradient(
@@ -697,11 +833,16 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) max-content;
     gap: 0.85rem;
-    align-items: center;
+    align-items: start;
     padding: 0 0.15rem 6px;
     min-height: 1.1rem;
     color: var(--toolbar-muted);
     font-size: 0.7rem;
+  }
+
+  .status-row.error {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.42rem;
   }
 
   .file-name,
@@ -715,6 +856,15 @@
 
   .file-name {
     color: var(--toolbar-accent);
+  }
+
+  .file-name.file-error {
+    color: #ffb39c;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
   }
 
   .file-loading {
@@ -737,6 +887,10 @@
     text-align: right;
     font-family: "SF Mono", "Roboto Mono", "Menlo", monospace;
     font-size: 0.68rem;
+  }
+
+  .status-row.error .readout-text {
+    text-align: left;
   }
 
   @keyframes toolbar-spin {

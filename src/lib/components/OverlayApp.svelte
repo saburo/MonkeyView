@@ -85,6 +85,51 @@
     return segments.at(-1) ?? path
   }
 
+  function formatLoadImageError(error: unknown): string {
+    if (typeof error === 'string' && error.trim()) {
+      return error.trim()
+    }
+
+    if (error instanceof Error && error.message.trim()) {
+      return error.message.trim()
+    }
+
+    if (typeof error === 'object' && error !== null) {
+      const { message, error: nestedError } = error as {
+        message?: unknown
+        error?: unknown
+      }
+
+      if (typeof message === 'string' && message.trim()) {
+        return message.trim()
+      }
+
+      if (typeof nestedError === 'string' && nestedError.trim()) {
+        return nestedError.trim()
+      }
+
+      try {
+        const serialized = JSON.stringify(error)
+
+        if (serialized && serialized !== '{}') {
+          return serialized
+        }
+      } catch {
+        // Ignore serialization failures and fall through to the generic message.
+      }
+    }
+
+    if (
+      typeof error === 'number' ||
+      typeof error === 'boolean' ||
+      typeof error === 'bigint'
+    ) {
+      return String(error)
+    }
+
+    return 'Failed to load the selected image.'
+  }
+
   function isOpacityShortcut(event: KeyboardEvent): boolean {
     return (
       event.code === 'Space' &&
@@ -321,8 +366,7 @@
         showWindow: true,
       })
     } catch (error) {
-      session.statusMessage =
-        error instanceof Error ? error.message : 'Failed to load the selected image.'
+      session.statusMessage = formatLoadImageError(error)
       imageSrc = null
       session.imagePath = null
       session.renderAssetPath = null
@@ -698,6 +742,12 @@
           toolbarOnTopPromoter?.schedule()
         }
       })
+      const unlistenToolbarResized = toolbarWindow
+        ? await toolbarWindow.onResized(async () => {
+            toolbarSize = await getWindowLogicalSize(toolbarWindow).catch(() => DEFAULT_TOOLBAR_SIZE)
+            await dockToolbar(true)
+          })
+        : () => {}
 
       const handleWindowPointerMove = (event: PointerEvent) => {
         handlePointerMove(event)
@@ -746,6 +796,7 @@
       disposers.push(unlistenOverlayMoved)
       disposers.push(unlistenOverlayResized)
       disposers.push(unlistenOverlayFocusChanged)
+      disposers.push(unlistenToolbarResized)
       disposers.push(() => {
         stopHoverCursorKeepAlive()
         window.removeEventListener('pointermove', handleWindowPointerMove)

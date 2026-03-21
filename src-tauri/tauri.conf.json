@@ -40,7 +40,7 @@
         "minWidth": 836,
         "maxWidth": 836,
         "minHeight": 104,
-        "maxHeight": 104,
+        "maxHeight": 420,
         "decorations": false,
         "transparent": true,
         "acceptFirstMouse": true,
