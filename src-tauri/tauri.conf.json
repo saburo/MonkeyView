@@ -35,10 +35,10 @@
       {
         "label": "toolbar",
         "title": "Monkey View",
-        "width": 836,
+        "width": 876,
         "height": 104,
-        "minWidth": 836,
-        "maxWidth": 836,
+        "minWidth": 876,
+        "maxWidth": 876,
         "minHeight": 104,
         "maxHeight": 420,
         "decorations": false,

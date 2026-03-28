@@ -12,7 +12,7 @@ import { clampWindowPositionToRect } from '../math/bounds'
 export const TOOLBAR_WINDOW_LABEL = 'toolbar'
 export const OVERLAY_WINDOW_LABEL = 'overlay'
 export const DEFAULT_TOOLBAR_SIZE: Size = {
-  width: 836,
+  width: 876,
   height: 104,
 }
 export const TOOLBAR_DOCK_GAP = 10

@@ -8,6 +8,11 @@ use image_loading::load_image_asset;
 use native_cursor::apply_native_cursor_fallback;
 use window_setup::configure_windows;
 
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -17,7 +22,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             load_image_asset,
-            apply_native_cursor_fallback
+            apply_native_cursor_fallback,
+            exit_app
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Monkey View");

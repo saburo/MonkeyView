@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
   import { emitTo } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -382,6 +383,10 @@
     });
   }
 
+  async function exitApp(): Promise<void> {
+    await invoke("exit_app");
+  }
+
   onMount(() => {
     const disposers: Array<() => void> = [];
 
@@ -515,106 +520,118 @@
   class="toolbar-shell"
   on:pointerdown|capture={() => void ensureToolbarFocus()}
 >
-  <div class="toolbar">
-    <div class="toolbar-group">
-      <span class="group-label">File</span>
-      <div class="group-controls">
-        <button
-          class="primary"
-          type="button"
-          on:click={() => void chooseImage()}
-        >
-          Open Image
-        </button>
-        <button
-          class="reset"
-          disabled={!snapshot.imageLoaded}
-          type="button"
-          on:click={resetImage}
-        >
-          Reset
-        </button>
-      </div>
-    </div>
-
-    <div class="toolbar-group">
-      <span class="group-label">Mode</span>
-      <div class="group-controls">
-        <button
-          class:active={snapshot.state.mode === "transform"}
-          disabled={!snapshot.imageLoaded}
-          type="button"
-          on:click={() => setMode("transform")}
-        >
-          Transform
-        </button>
-        <button
-          class:active={snapshot.state.mode === "select-anchor"}
-          disabled={!snapshot.imageLoaded}
-          type="button"
-          on:click={() => setMode("select-anchor")}
-        >
-          Anchor
-        </button>
-      </div>
-    </div>
-
-    <div class="toolbar-group overlay-group">
-      <span class="group-label">Overlay</span>
-      <div class="group-controls overlay-controls">
-        <div class="opacity-control">
-          <span class="opacity-label">Opacity:</span>
-          <input
-            disabled={!snapshot.imageLoaded}
-            max="100"
-            min="5"
-            step="5"
-            type="range"
-            value={Math.round(snapshot.state.opacity * 100)}
-            on:input={(event) =>
-              setOpacity(
-                Number((event.currentTarget as HTMLInputElement).value),
-              )}
-          />
-          <strong class="opacity-value"
-            >{Math.round(snapshot.state.opacity * 100)}%</strong
-          >
+  <div class="toolbar-top">
+    <div class="toolbar">
+      <div class="toolbar-group">
+        <span class="group-label">File</span>
+        <div class="group-controls">
           <button
-            class:active={snapshot.state.opacity < 0.995}
-            class="opacity-toggle"
+            class="primary"
+            type="button"
+            on:click={() => void chooseImage()}
+          >
+            Open Image
+          </button>
+          <button
+            class="reset"
             disabled={!snapshot.imageLoaded}
             type="button"
-            on:click={toggleOpacity}
+            on:click={resetImage}
           >
-            {snapshot.state.opacity < 0.995 ? "ON" : "OFF"}
+            Reset
           </button>
         </div>
-        <button
-          class:active={snapshot.state.clickThrough}
-          disabled={!snapshot.imageLoaded}
-          type="button"
-          on:click={toggleClickThrough}
-        >
-          Click-through
-        </button>
+      </div>
+
+      <div class="toolbar-group">
+        <span class="group-label">Mode</span>
+        <div class="group-controls">
+          <button
+            class:active={snapshot.state.mode === "transform"}
+            disabled={!snapshot.imageLoaded}
+            type="button"
+            on:click={() => setMode("transform")}
+          >
+            Transform
+          </button>
+          <button
+            class:active={snapshot.state.mode === "select-anchor"}
+            disabled={!snapshot.imageLoaded}
+            type="button"
+            on:click={() => setMode("select-anchor")}
+          >
+            Anchor
+          </button>
+        </div>
+      </div>
+
+      <div class="toolbar-group overlay-group">
+        <span class="group-label">Overlay</span>
+        <div class="group-controls overlay-controls">
+          <div class="opacity-control">
+            <span class="opacity-label">Opacity:</span>
+            <input
+              disabled={!snapshot.imageLoaded}
+              max="100"
+              min="5"
+              step="5"
+              type="range"
+              value={Math.round(snapshot.state.opacity * 100)}
+              on:input={(event) =>
+                setOpacity(
+                  Number((event.currentTarget as HTMLInputElement).value),
+                )}
+            />
+            <strong class="opacity-value"
+              >{Math.round(snapshot.state.opacity * 100)}%</strong
+            >
+            <button
+              class:active={snapshot.state.opacity < 0.995}
+              class="opacity-toggle"
+              disabled={!snapshot.imageLoaded}
+              type="button"
+              on:click={toggleOpacity}
+            >
+              {snapshot.state.opacity < 0.995 ? "ON" : "OFF"}
+            </button>
+          </div>
+          <button
+            class:active={snapshot.state.clickThrough}
+            disabled={!snapshot.imageLoaded}
+            type="button"
+            on:click={toggleClickThrough}
+          >
+            Click-through
+          </button>
+        </div>
+      </div>
+
+      <div class="toolbar-group">
+        <span class="group-label">Move</span>
+        <div class="group-controls">
+          <button
+            bind:this={dragHandleElement}
+            class="drag-handle"
+            type="button"
+            on:pointerdown|preventDefault={(event) =>
+              void handleDragPointerDown(event)}
+          >
+            <span class="grip" aria-hidden="true">||||</span>
+            <span>Drag</span>
+          </button>
+        </div>
       </div>
     </div>
 
-    <div class="toolbar-group">
-      <span class="group-label">Move</span>
-      <div class="group-controls">
-        <button
-          bind:this={dragHandleElement}
-          class="drag-handle"
-          type="button"
-          on:pointerdown|preventDefault={(event) =>
-            void handleDragPointerDown(event)}
-        >
-          <span class="grip" aria-hidden="true">||||</span>
-          <span>Drag</span>
-        </button>
-      </div>
-    </div>
+    <button
+      aria-label="Quit app"
+      class="window-close"
+      title="Quit app"
+      type="button"
+      on:click={() => void exitApp()}
+    >
+      X
+    </button>
   </div>
 
   <div class:error={statusIsError} class="status-row">
@@ -669,6 +686,15 @@
     display: flex;
     gap: 0.5rem;
     align-items: stretch;
+    flex: 0 0 auto;
+    min-width: max-content;
+  }
+
+  .toolbar-top {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+    justify-content: space-between;
   }
 
   .toolbar-group {
@@ -725,13 +751,16 @@
   button {
     cursor: pointer;
     white-space: nowrap;
+    transform: scale(1);
   }
 
   button:hover:enabled {
     background: rgba(255, 255, 255, 0.14);
     border-color: rgba(255, 255, 255, 0.22);
-    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16);
-    transform: translateY(-1px);
+    box-shadow:
+      0 14px 28px rgba(0, 0, 0, 0.18),
+      0 3px 10px rgba(255, 255, 255, 0.06);
+    transform: scale(1.025);
   }
 
   button.active:enabled {
@@ -747,7 +776,10 @@
   }
 
   button:active:enabled {
-    transform: translateY(0);
+    box-shadow:
+      inset 0 1px 1px rgba(255, 255, 255, 0.05),
+      0 6px 14px rgba(0, 0, 0, 0.16);
+    transform: scale(0.985);
   }
 
   button.primary {
@@ -772,6 +804,35 @@
     gap: 0.5rem;
     align-items: center;
     padding-inline: 0.8rem 0.92rem;
+    cursor: move;
+  }
+
+  .drag-handle:hover:enabled,
+  .drag-handle:active:enabled {
+    cursor: move;
+  }
+
+  .window-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 1.95rem;
+    min-width: 1.95rem;
+    min-height: 1.95rem;
+    padding: 0;
+    border-radius: 999px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  .window-close:hover:enabled {
+    background: rgba(255, 120, 92, 0.18);
+    border-color: rgba(255, 145, 116, 0.3);
+    box-shadow:
+      0 14px 28px rgba(110, 18, 0, 0.24),
+      0 3px 10px rgba(255, 145, 116, 0.1);
   }
 
   .grip {
