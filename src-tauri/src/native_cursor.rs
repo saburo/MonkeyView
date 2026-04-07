@@ -9,6 +9,8 @@ fn normalize_cursor_name(icon: &str) -> &str {
         "grabbing" => "grabbing",
         "grab" => "grab",
         "hand" => "hand",
+        "allScroll" => "allScroll",
+        "move" => "move",
         _ => "default",
     }
 }
@@ -20,6 +22,7 @@ fn apply_native_cursor(icon: &str) {
         "grabbing" => NSCursor::closedHandCursor(),
         "grab" => NSCursor::openHandCursor(),
         "hand" => NSCursor::pointingHandCursor(),
+        "allScroll" | "move" => return,
         _ => NSCursor::arrowCursor(),
     };
 
@@ -51,6 +54,8 @@ mod tests {
         assert_eq!(normalize_cursor_name("hand"), "hand");
         assert_eq!(normalize_cursor_name("grabbing"), "grabbing");
         assert_eq!(normalize_cursor_name("crosshair"), "crosshair");
+        assert_eq!(normalize_cursor_name("allScroll"), "allScroll");
+        assert_eq!(normalize_cursor_name("move"), "move");
     }
 
     #[test]

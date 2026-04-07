@@ -5,6 +5,7 @@
   import { getCurrentWindow, type CursorIcon } from '@tauri-apps/api/window'
   import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
   import {
+    clampNumber,
     clampWindowPositionToRect,
     computeInteractionSurfaceSize,
     constrainTransformedBoundsToWorkArea,
@@ -60,7 +61,15 @@
   let viewportElement: HTMLDivElement | null = null
   let session = createEmptySessionState()
   let bounds: TransformedBounds | null = null
+  let actualWindowPosition: Point = { x: 0, y: 0 }
   let dragSession: TransformDragSession | null = null
+  let moveDragState: {
+    accumulatedDelta: Point
+    locked: boolean
+    pointerOrigin: Point
+    visibleRect: Rect
+    windowOrigin: Point
+  } | null = null
   let dragPointerId: number | null = null
   let dragWorkArea: Rect | null = null
   let imageSrc: string | null = null
@@ -75,6 +84,7 @@
   let cursorSyncInFlight = false
   let cursorSyncQueued = false
   let lastAppliedCursor: CursorIcon | null = null
+  let shiftKeyActive = false
 
   function basename(path: string | null): string {
     if (!path) {
@@ -229,6 +239,55 @@
     }
   }
 
+  function mapViewportPointToRenderPoint(viewportPoint: Point): Point {
+    return {
+      x: viewportPoint.x + actualWindowPosition.x - session.windowPosition.x,
+      y: viewportPoint.y + actualWindowPosition.y - session.windowPosition.y,
+    }
+  }
+
+  function computeClippedOverlayGeometry(
+    virtualPosition: Point,
+    virtualSize: Size,
+    visibleRect: Rect,
+  ): {
+    position: Point
+    size: Size
+  } {
+    const virtualMaxX = virtualPosition.x + virtualSize.width
+    const virtualMaxY = virtualPosition.y + virtualSize.height
+    const visibleMaxX = visibleRect.x + visibleRect.width
+    const visibleMaxY = visibleRect.y + visibleRect.height
+    const clippedMinX = Math.max(virtualPosition.x, visibleRect.x)
+    const clippedMinY = Math.max(virtualPosition.y, visibleRect.y)
+    const clippedMaxX = Math.min(virtualMaxX, visibleMaxX)
+    const clippedMaxY = Math.min(virtualMaxY, visibleMaxY)
+
+    if (clippedMaxX > clippedMinX && clippedMaxY > clippedMinY) {
+      return {
+        position: {
+          x: clippedMinX,
+          y: clippedMinY,
+        },
+        size: {
+          width: Math.max(1, clippedMaxX - clippedMinX),
+          height: Math.max(1, clippedMaxY - clippedMinY),
+        },
+      }
+    }
+
+    return {
+      position: {
+        x: clampNumber(virtualPosition.x, visibleRect.x, Math.max(visibleRect.x, visibleMaxX - 1)),
+        y: clampNumber(virtualPosition.y, visibleRect.y, Math.max(visibleRect.y, visibleMaxY - 1)),
+      },
+      size: {
+        width: 1,
+        height: 1,
+      },
+    }
+  }
+
   async function dockToolbar(immediate = false): Promise<void> {
     if (!bounds || !toolbarPositionScheduler) {
       return
@@ -266,6 +325,7 @@
   ): Promise<void> {
     bounds = nextBounds
     session.windowPosition = nextWindowPosition
+    actualWindowPosition = nextWindowPosition
 
     const nextGeometry = {
       position: nextWindowPosition,
@@ -357,7 +417,9 @@
       session.statusMessage = basename(asset.imagePath)
       imageSrc = asset.renderSrc
       dragSession = null
+      moveDragState = null
       dragWorkArea = null
+      actualWindowPosition = initialOverlayPosition
 
       await setOverlayClickThrough(overlayWindow, false)
       await applyOverlayGeometry(nextBounds, initialOverlayPosition, {
@@ -376,6 +438,7 @@
       session.state = createDefaultTransformState()
       session.activeGrabPointSource = null
       dragSession = null
+      moveDragState = null
       bounds = null
       await overlayWindow.hide()
       await emitSnapshot()
@@ -484,6 +547,7 @@
     session.activeGrabPointSource = null
     session.statusMessage = ''
     dragSession = null
+    moveDragState = null
     dragWorkArea = null
 
     const nextBounds = computeTransformedBounds(
@@ -525,11 +589,22 @@
         await resetOverlay()
         return
       case 'group-move':
-        if (!session.sourceSize) {
+        if (!session.sourceSize || !bounds) {
           return
         }
 
         session.windowPosition = action.windowPosition
+        const visibleRect = await getCurrentMonitorWorkArea(overlayWindow)
+        const nextGeometry = computeClippedOverlayGeometry(
+          action.windowPosition,
+          {
+            width: bounds.width,
+            height: bounds.height,
+          },
+          visibleRect,
+        )
+        actualWindowPosition = nextGeometry.position
+        geometryScheduler.schedule(nextGeometry)
         await emitSnapshot()
         return
       default:
@@ -568,10 +643,66 @@
     })
   }
 
-  function endDrag(pointerId?: number): void {
+  function updateMoveDragPosition(delta: Point): void {
+    if (!moveDragState || !bounds) {
+      return
+    }
+
+    moveDragState = {
+      ...moveDragState,
+      accumulatedDelta: delta,
+    }
+
+    const nextWindowPosition = {
+      x: moveDragState.windowOrigin.x + delta.x,
+      y: moveDragState.windowOrigin.y + delta.y,
+    }
+    const nextGeometry = computeClippedOverlayGeometry(
+      nextWindowPosition,
+      {
+        width: bounds.width,
+        height: bounds.height,
+      },
+      moveDragState.visibleRect,
+    )
+
+    session.windowPosition = nextWindowPosition
+    actualWindowPosition = nextGeometry.position
+    geometryScheduler.schedule(nextGeometry)
+    void emitSnapshot()
+  }
+
+  async function requestMovePointerLock(): Promise<void> {
+    if (!viewportElement || !moveDragState) {
+      return
+    }
+
+    try {
+      await Promise.resolve(viewportElement.requestPointerLock())
+    } catch {
+      moveDragState = moveDragState
+        ? {
+            ...moveDragState,
+            locked: false,
+          }
+        : null
+    }
+  }
+
+  function endDrag(
+    pointerId?: number,
+    options: {
+      exitPointerLock?: boolean
+    } = {},
+  ): void {
     if (pointerId !== undefined && dragPointerId !== null && dragPointerId !== pointerId) {
       return
     }
+
+    const shouldExitPointerLock =
+      options.exitPointerLock !== false &&
+      moveDragState?.locked === true &&
+      document.pointerLockElement === viewportElement
 
     if (dragPointerId !== null && viewportElement?.hasPointerCapture(dragPointerId)) {
       viewportElement.releasePointerCapture(dragPointerId)
@@ -579,9 +710,15 @@
 
     dragPointerId = null
     dragSession = null
+    moveDragState = null
     dragWorkArea = null
     session.activeGrabPointSource = null
     session.statusMessage = ''
+
+    if (shouldExitPointerLock) {
+      void document.exitPointerLock()
+    }
+
     void emitSnapshot()
   }
 
@@ -596,9 +733,10 @@
     if (!viewportPoint) {
       return
     }
+    const renderPoint = mapViewportPointToRenderPoint(viewportPoint)
 
     const sourcePoint = mapRenderPointToSource(
-      viewportPoint,
+      renderPoint,
       bounds,
       session.sourceSize,
       session.state.anchor,
@@ -608,6 +746,35 @@
     )
 
     if (!isSourcePointInsideImage(sourcePoint, session.sourceSize)) {
+      return
+    }
+
+    if (event.shiftKey) {
+      const visibleRect = await getCurrentMonitorWorkArea(overlayWindow)
+      viewportElement?.setPointerCapture(event.pointerId)
+      dragPointerId = event.pointerId
+      dragSession = null
+      moveDragState = {
+        accumulatedDelta: {
+          x: 0,
+          y: 0,
+        },
+        locked: false,
+        pointerOrigin: {
+          x: event.screenX,
+          y: event.screenY,
+        },
+        visibleRect,
+        windowOrigin: {
+          ...session.windowPosition,
+        },
+      }
+      dragWorkArea = null
+      session.activeGrabPointSource = null
+      session.statusMessage = ''
+      event.preventDefault()
+      void requestMovePointerLock()
+      void emitSnapshot()
       return
     }
 
@@ -653,6 +820,19 @@
   }
 
   function handlePointerMove(event: PointerEvent): void {
+    if (moveDragState && bounds) {
+      if (moveDragState.locked) {
+        event.preventDefault()
+        return
+      }
+
+      updateMoveDragPosition({
+        x: event.screenX - moveDragState.pointerOrigin.x,
+        y: event.screenY - moveDragState.pointerOrigin.y,
+      })
+      return
+    }
+
     if (!dragSession || !bounds || !session.sourceSize) {
       return
     }
@@ -689,6 +869,7 @@
 
     bounds = nextBounds
     session.windowPosition = nextWindowPosition
+    actualWindowPosition = nextWindowPosition
     geometryScheduler.schedule({
       position: nextWindowPosition,
       size: {
@@ -706,10 +887,45 @@
     void syncOverlayCursor(true)
   }
 
+  function handleSurfacePointerMove(event: PointerEvent): void {
+    shiftKeyActive = event.shiftKey
+  }
+
   function handleSurfacePointerLeave(): void {
     overlayHovered = false
+    shiftKeyActive = false
     stopHoverCursorKeepAlive()
     void syncOverlayCursor(true)
+  }
+
+  function handleLockedMouseMove(event: MouseEvent): void {
+    if (!moveDragState?.locked) {
+      return
+    }
+
+    updateMoveDragPosition({
+      x: moveDragState.accumulatedDelta.x + event.movementX,
+      y: moveDragState.accumulatedDelta.y + event.movementY,
+    })
+    event.preventDefault()
+  }
+
+  function handlePointerLockChange(): void {
+    if (document.pointerLockElement === viewportElement) {
+      if (moveDragState) {
+        moveDragState = {
+          ...moveDragState,
+          locked: true,
+        }
+      }
+      return
+    }
+
+    if (moveDragState?.locked) {
+      endDrag(undefined, {
+        exitPointerLock: false,
+      })
+    }
   }
 
   onMount(() => {
@@ -724,6 +940,7 @@
       }
 
       session.windowPosition = await getWindowLogicalPosition(overlayWindow)
+      actualWindowPosition = session.windowPosition
 
       const unlistenToolbarActions = await overlayWebview.listen<ToolbarAction>(
         TOOLBAR_ACTION_EVENT,
@@ -758,8 +975,18 @@
       const handleWindowPointerCancel = (event: PointerEvent) => {
         endDrag(event.pointerId)
       }
+      const handleWindowMouseUp = () => {
+        if (moveDragState) {
+          endDrag()
+        }
+      }
       const handleWindowKeyDown = (event: KeyboardEvent) => {
         if (!session.sourceSize) {
+          return
+        }
+
+        if (event.key === 'Shift') {
+          shiftKeyActive = true
           return
         }
 
@@ -777,6 +1004,11 @@
         }
       }
       const handleWindowKeyUp = (event: KeyboardEvent) => {
+        if (event.key === 'Shift') {
+          shiftKeyActive = false
+          return
+        }
+
         if (!session.sourceSize || event.code !== 'KeyA') {
           return
         }
@@ -789,8 +1021,11 @@
       window.addEventListener('pointermove', handleWindowPointerMove)
       window.addEventListener('pointerup', handleWindowPointerUp)
       window.addEventListener('pointercancel', handleWindowPointerCancel)
+      window.addEventListener('mouseup', handleWindowMouseUp)
       window.addEventListener('keydown', handleWindowKeyDown, true)
       window.addEventListener('keyup', handleWindowKeyUp, true)
+      document.addEventListener('mousemove', handleLockedMouseMove)
+      document.addEventListener('pointerlockchange', handlePointerLockChange)
 
       disposers.push(unlistenToolbarActions)
       disposers.push(unlistenOverlayMoved)
@@ -802,8 +1037,12 @@
         window.removeEventListener('pointermove', handleWindowPointerMove)
         window.removeEventListener('pointerup', handleWindowPointerUp)
         window.removeEventListener('pointercancel', handleWindowPointerCancel)
+        window.removeEventListener('mouseup', handleWindowMouseUp)
         window.removeEventListener('keydown', handleWindowKeyDown, true)
         window.removeEventListener('keyup', handleWindowKeyUp, true)
+        document.removeEventListener('mousemove', handleLockedMouseMove)
+        document.removeEventListener('pointerlockchange', handlePointerLockChange)
+        endDrag(undefined)
         document.body.style.cursor = 'default'
       })
 
@@ -822,14 +1061,19 @@
       ? getAnchorSourcePosition(session.sourceSize, session.state.anchor)
       : null
 
+  $: renderOffset = {
+    x: session.windowPosition.x - actualWindowPosition.x,
+    y: session.windowPosition.y - actualWindowPosition.y,
+  }
+
   $: imageStyle =
     bounds && session.sourceSize && anchorPosition
-      ? `width:${session.sourceSize.width}px;height:${session.sourceSize.height}px;opacity:${session.state.opacity};transform-origin:${anchorPosition.x}px ${anchorPosition.y}px;transform:translate(${bounds.offsetX}px, ${bounds.offsetY}px) scaleY(${SCREEN_Y_SCALE}) rotate(${session.state.rotationDeg}deg) scale(${session.state.uniformScale});`
+      ? `width:${session.sourceSize.width}px;height:${session.sourceSize.height}px;opacity:${session.state.opacity};transform-origin:${anchorPosition.x}px ${anchorPosition.y}px;transform:translate(${bounds.offsetX + renderOffset.x}px, ${bounds.offsetY + renderOffset.y}px) scaleY(${SCREEN_Y_SCALE}) rotate(${session.state.rotationDeg}deg) scale(${session.state.uniformScale});`
       : ''
 
   $: anchorMarkerStyle =
     bounds
-      ? `left:${bounds.anchorRenderPosition.x}px;top:${bounds.anchorRenderPosition.y}px;`
+      ? `left:${bounds.anchorRenderPosition.x + renderOffset.x}px;top:${bounds.anchorRenderPosition.y + renderOffset.y}px;`
       : ''
 
   $: grabPointPosition =
@@ -845,22 +1089,30 @@
         )
       : null
 
+  $: grabPointStyle = grabPointPosition
+    ? `left:${grabPointPosition.x + renderOffset.x}px;top:${grabPointPosition.y + renderOffset.y}px;`
+    : ''
+
   $: cursorState = resolveCursorState({
     imageLoaded: Boolean(imageSrc && bounds && session.sourceSize),
     mode: session.state.mode,
-    dragging: dragSession !== null,
+    dragging: dragSession !== null || moveDragState !== null,
   })
 
   $: overlayModeClass =
-    cursorState === 'select-anchor'
-      ? 'select-anchor'
-      : cursorState === 'dragging'
+    moveDragState !== null
+      ? 'move-dragging'
+      : cursorState === 'select-anchor'
+        ? 'select-anchor'
+        : cursorState === 'dragging'
         ? 'transform-dragging'
         : 'transform'
 
   $: overlayCursor =
     session.state.clickThrough
       ? 'default'
+      : moveDragState !== null || (overlayHovered && shiftKeyActive)
+        ? 'allScroll'
       : cursorState === 'dragging'
         ? resolveCursorIcon(cursorState)
         : overlayHovered
@@ -894,6 +1146,7 @@
     on:pointerdown|capture={() => void ensureOverlayFocus()}
     on:pointerdown={handlePointerDown}
     on:pointerenter={handleSurfacePointerEnter}
+    on:pointermove={handleSurfacePointerMove}
     on:pointerleave={handleSurfacePointerLeave}
   >
     <img alt="Overlay reference" class="overlay-image" draggable="false" src={imageSrc} style={imageStyle} />
@@ -902,7 +1155,7 @@
     {#if grabPointPosition && dragSession}
       <div
         class="grab-point"
-        style={`left:${grabPointPosition.x}px;top:${grabPointPosition.y}px;`}
+        style={grabPointStyle}
       ></div>
     {/if}
   </div>
@@ -925,6 +1178,10 @@
   .overlay-surface.transform-dragging {
     cursor: -webkit-grabbing;
     cursor: grabbing;
+  }
+
+  .overlay-surface.move-dragging {
+    cursor: all-scroll;
   }
 
   .overlay-surface.select-anchor {

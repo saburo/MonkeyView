@@ -37,5 +37,9 @@ export function resolveCursorIcon(cursorState: OverlayCursorState): CursorIcon {
 }
 
 export function resolveCssCursor(cursorIcon: CursorIcon): string {
+  if (cursorIcon === 'allScroll') {
+    return 'all-scroll'
+  }
+
   return cursorIcon
 }
